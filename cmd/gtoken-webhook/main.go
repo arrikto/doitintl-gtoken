@@ -48,6 +48,7 @@ const (
 
 	// application specific annotations
 	tokenGenerateAnnotation = "gtoken.doit-intl.com/tokenGenerate"
+	tokenRefreshAnnotation  = "gtoken.doit-intl.com/tokenRefresh"
 	audienceAnnotation      = "gtoken.doit-intl.com/tokenAudience"
 	methodAnnotation        = "gtoken.doit-intl.com/tokenMethod"
 	volumePathAnnotation    = "gtoken.doit-intl.com/volumePath"
@@ -89,6 +90,7 @@ type mutatingWebhook struct {
 
 type config struct {
 	generate   bool
+	refresh   bool
 	awsRoleArn string
 	audience   string
 	method     string
@@ -204,6 +206,18 @@ func (c *config) parseFromAnnotations(annotations map[string]string, ignoreAnnot
 			}
 		}
 	}
+	// parse the "gtoken.doit-intl.com/tokenRefresh" annotation.
+	if !stringInSlice(tokenRefreshAnnotation, ignoreAnnotations) {
+		refresh, ok := annotations[tokenRefreshAnnotation]
+		if ok {
+			parsed, parseErr := strconv.ParseBool(refresh)
+			if parseErr != nil {
+				err := fmt.Errorf("invalid %s: %s. %s", tokenRefreshAnnotation, refresh, parseErr.Error())
+				return err
+			}
+			c.refresh = parsed
+		}
+	}
 	// parse the "gtoken.doit-intl.com/tokenAudience" annotation.
 	if !stringInSlice(audienceAnnotation, ignoreAnnotations) {
 		audience, ok := annotations[audienceAnnotation]
@@ -278,6 +292,7 @@ func (mw *mutatingWebhook) mutateContainers(containers []corev1.Container, annot
 func (mw *mutatingWebhook) mutatePod(ctx context.Context, pod *corev1.Pod, ns string, dryRun bool) error {
 	// get the configuration from the Service Account annotations
 	var annotationsConfig config
+	annotationsConfig.refresh = true
 	annotations, err := mw.getServiceAccountAnnotations(ctx, pod.Spec.ServiceAccountName, ns)
 	if err != nil {
 		return err
@@ -328,10 +343,14 @@ func (mw *mutatingWebhook) mutatePod(ctx context.Context, pod *corev1.Pod, ns st
 		pod.Spec.InitContainers = append([]corev1.Container{getGtokenContainer("generate-gcp-id-token",
 			mw.image, mw.pullPolicy, mw.volumeName, false, &annotationsConfig)}, pod.Spec.InitContainers...)
 		logger.Debug("successfully prepended pod init containers to spec")
-		// append sidekick gtoken update container (as last container)
-		pod.Spec.Containers = append(pod.Spec.Containers, getGtokenContainer("update-gcp-id-token",
-			mw.image, mw.pullPolicy, mw.volumeName, true, &annotationsConfig))
-		logger.Debug("successfully prepended pod sidekick containers to spec")
+		if !annotationsConfig.refresh {
+			logger.Debug("skipping prepending pod sidekick containers to spec: token refresh is disabled")
+		} else {
+			// append sidekick gtoken update container (as last container)
+			pod.Spec.Containers = append(pod.Spec.Containers, getGtokenContainer("update-gcp-id-token",
+				mw.image, mw.pullPolicy, mw.volumeName, true, &annotationsConfig))
+			logger.Debug("successfully prepended pod sidekick containers to spec")
+		}
 		// append empty gtoken volume
 		pod.Spec.Volumes = append(pod.Spec.Volumes, getGtokenVolume(mw.volumeName))
 		logger.Debug("successfully appended pod spec volumes")
