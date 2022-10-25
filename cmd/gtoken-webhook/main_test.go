@@ -6,12 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	cmp "github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	fake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestMain(m *testing.M) {
@@ -31,7 +31,7 @@ func Test_mutatingWebhook_mutateContainers(t *testing.T) {
 	}
 	type args struct {
 		containers []corev1.Container
-		roleArn    string
+		config     config
 		ns         string
 	}
 	tests := []struct {
@@ -56,8 +56,12 @@ func Test_mutatingWebhook_mutateContainers(t *testing.T) {
 						Image: "test-image",
 					},
 				},
-				roleArn: "arn:aws:iam::123456789012:role/testrole",
-				ns:      "test-namespace",
+				config: config{
+					awsRoleArn: "arn:aws:iam::123456789012:role/testrole",
+					audience:   "audience",
+					generate:   true,
+				},
+				ns: "test-namespace",
 			},
 			wantedContainers: []corev1.Container{
 				{
@@ -92,8 +96,12 @@ func Test_mutatingWebhook_mutateContainers(t *testing.T) {
 						Image: "test-image-2",
 					},
 				},
-				roleArn: "arn:aws:iam::123456789012:role/testrole",
-				ns:      "test-namespace",
+				config: config{
+					awsRoleArn: "arn:aws:iam::123456789012:role/testrole",
+					audience:   "audience",
+					generate:   true,
+				},
+				ns: "test-namespace",
 			},
 			wantedContainers: []corev1.Container{
 				{
@@ -127,8 +135,12 @@ func Test_mutatingWebhook_mutateContainers(t *testing.T) {
 				volumePath: "/test-volume-path",
 			},
 			args: args{
-				roleArn: "arn:aws:iam::123456789012:role/testrole",
-				ns:      "test-namespace",
+				config: config{
+					awsRoleArn: "arn:aws:iam::123456789012:role/testrole",
+					audience:   "audience",
+					generate:   true,
+				},
+				ns: "test-namespace",
 			},
 			mutated: false,
 		},
@@ -143,7 +155,7 @@ func Test_mutatingWebhook_mutateContainers(t *testing.T) {
 				volumePath: tt.fields.volumePath,
 				tokenFile:  tt.fields.tokenFile,
 			}
-			got := mw.mutateContainers(tt.args.containers, tt.args.roleArn)
+			got := mw.mutateContainers(tt.args.containers, tt.args.config)
 			if got != tt.mutated {
 				t.Errorf("mutatingWebhook.mutateContainers() = %v, want %v", got, tt.mutated)
 			}
