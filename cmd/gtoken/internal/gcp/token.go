@@ -96,12 +96,13 @@ func (it *IDToken) WriteToFile(token, fileName string) error {
 func (it *IDToken) generateFromMetadata(ctx context.Context) (string, error) {
 	tokenSource, err := idtoken.NewTokenSource(ctx, it.audience)
 	if err != nil {
-		return "", fmt.Errorf("failed to get iam credentials client: %s", err.Error())
+		return "", fmt.Errorf("failed to create token source: %s", err.Error())
 	}
 	token, err := tokenSource.Token()
 	if err != nil {
-		return "", fmt.Errorf("failed to get iam credentials client: %s", err.Error())
+		return "", fmt.Errorf("failed to generate ID token: %s", err.Error())
 	}
+	log.Println("successfully generated ID token")
 	return token.AccessToken, nil
 }
 

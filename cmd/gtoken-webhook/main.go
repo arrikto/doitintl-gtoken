@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -169,8 +170,18 @@ func (mw *mutatingWebhook) getConfig(ctx context.Context, name, ns string) (conf
 		annotationConfig.generate = true
 	}
 	generate, ok := sa.GetAnnotations()[tokenGenerateAnnotation]
-	if ok && generate == "true" {
-		annotationConfig.generate = true
+	if ok {
+		parsed, parseErr := strconv.ParseBool(generate)
+		if parseErr != nil {
+			err = fmt.Errorf("invalid %s: %s. %s", tokenGenerateAnnotation, generate, parseErr.Error())
+			logger.WithFields(log.Fields{"service account": name, "namespace": ns}).
+				WithError(err).
+				Warnf("error parsing the generate flag")
+			return config{}, err
+		}
+		if parsed {
+			annotationConfig.generate = true
+		}
 	}
 	audience, ok := sa.GetAnnotations()[audienceAnnotation]
 	if ok {
@@ -179,8 +190,10 @@ func (mw *mutatingWebhook) getConfig(ctx context.Context, name, ns string) (conf
 	method, ok := sa.GetAnnotations()[methodAnnotation]
 	if ok {
 		if method != methodAPI && method != methodMetadata {
-			err := fmt.Errorf("invalid %s: %s. Allowed values: [api, metadata]", methodAnnotation, method)
-			logger.WithFields(log.Fields{"service account": name, "namespace": ns}).WithError(err).Warnf("error setting the method")
+			err = fmt.Errorf("invalid %s: %s. Allowed values: [api, metadata]", methodAnnotation, method)
+			logger.WithFields(log.Fields{"service account": name, "namespace": ns}).
+				WithError(err).
+				Warnf("error setting the method")
 			return config{}, err
 		}
 		annotationConfig.method = method
