@@ -193,7 +193,7 @@ func (mw *mutatingWebhook) getConfig(ctx context.Context, name, ns string) (conf
 			err = fmt.Errorf("invalid %s: %s. Allowed values: [api, metadata]", methodAnnotation, method)
 			logger.WithFields(log.Fields{"service account": name, "namespace": ns}).
 				WithError(err).
-				Warnf("error setting the method")
+				Warnf("error setting the token generation method")
 			return config{}, err
 		}
 		annotationConfig.method = method

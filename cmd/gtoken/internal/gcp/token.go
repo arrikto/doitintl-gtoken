@@ -94,6 +94,7 @@ func (it *IDToken) WriteToFile(token, fileName string) error {
 }
 
 func (it *IDToken) generateFromMetadata(ctx context.Context) (string, error) {
+	log.Println("generating a new ID token using the metadata server")
 	tokenSource, err := idtoken.NewTokenSource(ctx, it.audience)
 	if err != nil {
 		return "", fmt.Errorf("failed to create token source: %s", err.Error())
@@ -107,7 +108,7 @@ func (it *IDToken) generateFromMetadata(ctx context.Context) (string, error) {
 }
 
 func (it *IDToken) generateFromCredentialsAPI(ctx context.Context, serviceAccount string) (string, error) {
-	log.Println("generating a new ID token")
+	log.Println("generating a new ID token using the credentials API")
 	iamCredentialsClient, err := iamcredentials.NewService(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to get iam credentials client: %s", err.Error())
