@@ -50,6 +50,8 @@ const (
 	tokenGenerateAnnotation = "gtoken.doit-intl.com/tokenGenerate"
 	audienceAnnotation      = "gtoken.doit-intl.com/tokenAudience"
 	methodAnnotation        = "gtoken.doit-intl.com/tokenMethod"
+	volumePathAnnotation    = "gtoken.doit-intl.com/volumePath"
+	tokenFilenameAnnotation = "gtoken.doit-intl.com/tokenFilename"
 
 	// AWS Web Identity Token ENV
 	awsWebIdentityTokenFile = "AWS_WEB_IDENTITY_TOKEN_FILE"
@@ -90,6 +92,8 @@ type config struct {
 	awsRoleArn string
 	audience   string
 	method     string
+	volumePath string
+	tokenFile  string
 }
 
 var logger *log.Logger
@@ -111,6 +115,16 @@ func randomString(l int) string {
 		bytes[i] = byte(randomInt(97, 122))
 	}
 	return string(bytes)
+}
+
+// Checks if a slice included a string
+func stringInSlice(a string, list []string) bool {
+	for _, b := range list {
+		if b == a {
+			return true
+		}
+	}
+	return false
 }
 
 func newK8SClient() (kubernetes.Interface, error) {
@@ -156,52 +170,76 @@ func handlerFor(config mutating.WebhookConfig, recorder wh.MetricsRecorder, logg
 	return handler
 }
 
-func (mw *mutatingWebhook) getConfig(ctx context.Context, name, ns string) (config, error) {
+func (mw *mutatingWebhook) getServiceAccountAnnotations(ctx context.Context, name, ns string) (map[string]string, error) {
 	sa, err := mw.k8sClient.CoreV1().ServiceAccounts(ns).Get(ctx, name, metav1.GetOptions{})
-	var annotationConfig config
 
 	if err != nil {
 		logger.WithFields(log.Fields{"service account": name, "namespace": ns}).WithError(err).Fatalf("error getting service account")
-		return annotationConfig, err
+		return map[string]string{}, err
 	}
-	roleArn, ok := sa.GetAnnotations()[awsRoleArnKey]
-	if ok {
-		annotationConfig.awsRoleArn = roleArn
-		annotationConfig.generate = true
-	}
-	generate, ok := sa.GetAnnotations()[tokenGenerateAnnotation]
-	if ok {
-		parsed, parseErr := strconv.ParseBool(generate)
-		if parseErr != nil {
-			err = fmt.Errorf("invalid %s: %s. %s", tokenGenerateAnnotation, generate, parseErr.Error())
-			logger.WithFields(log.Fields{"service account": name, "namespace": ns}).
-				WithError(err).
-				Warnf("error parsing the generate flag")
-			return config{}, err
-		}
-		if parsed {
-			annotationConfig.generate = true
-		}
-	}
-	audience, ok := sa.GetAnnotations()[audienceAnnotation]
-	if ok {
-		annotationConfig.audience = audience
-	}
-	method, ok := sa.GetAnnotations()[methodAnnotation]
-	if ok {
-		if method != methodAPI && method != methodMetadata {
-			err = fmt.Errorf("invalid %s: %s. Allowed values: [api, metadata]", methodAnnotation, method)
-			logger.WithFields(log.Fields{"service account": name, "namespace": ns}).
-				WithError(err).
-				Warnf("error setting the token generation method")
-			return config{}, err
-		}
-		annotationConfig.method = method
-	}
-	return annotationConfig, nil
+	return sa.GetAnnotations(), nil
 }
 
-func (mw *mutatingWebhook) mutateContainers(containers []corev1.Container, annotationConfig config) bool {
+//nolint:gocyclo
+func (c *config) parseFromAnnotations(annotations map[string]string, ignoreAnnotations []string) error {
+	// parse the "amazonaws.com/role-arn" annotation.
+	if !stringInSlice(awsRoleArnKey, ignoreAnnotations) {
+		roleArn, ok := annotations[awsRoleArnKey]
+		if ok {
+			c.awsRoleArn = roleArn
+			c.generate = true
+		}
+	}
+	// parse the "gtoken.doit-intl.com/tokenGenerate" annotation.
+	if !stringInSlice(tokenGenerateAnnotation, ignoreAnnotations) {
+		generate, ok := annotations[tokenGenerateAnnotation]
+		if ok {
+			parsed, parseErr := strconv.ParseBool(generate)
+			if parseErr != nil {
+				err := fmt.Errorf("invalid %s: %s. %s", tokenGenerateAnnotation, generate, parseErr.Error())
+				return err
+			}
+			if parsed {
+				c.generate = parsed
+			}
+		}
+	}
+	// parse the "gtoken.doit-intl.com/tokenAudience" annotation.
+	if !stringInSlice(audienceAnnotation, ignoreAnnotations) {
+		audience, ok := annotations[audienceAnnotation]
+		if ok {
+			c.audience = audience
+		}
+	}
+	// parse the "gtoken.doit-intl.com/tokenMethod" annotation.
+	if !stringInSlice(methodAnnotation, ignoreAnnotations) {
+		method, ok := annotations[methodAnnotation]
+		if ok {
+			if method != methodAPI && method != methodMetadata {
+				err := fmt.Errorf("invalid %s: %s. Allowed values: [api, metadata]", methodAnnotation, method)
+				return err
+			}
+			c.method = method
+		}
+	}
+	// parse the "gtoken.doit-intl.com/volumePath" annotation.
+	if !stringInSlice(volumePathAnnotation, ignoreAnnotations) {
+		volumePath, ok := annotations[volumePathAnnotation]
+		if ok {
+			c.volumePath = volumePath
+		}
+	}
+	// parse the "gtoken.doit-intl.com/tokenFilename" annotation.
+	if !stringInSlice(tokenFilenameAnnotation, ignoreAnnotations) {
+		tokenFilename, ok := annotations[tokenFilenameAnnotation]
+		if ok {
+			c.tokenFile = tokenFilename
+		}
+	}
+	return nil
+}
+
+func (mw *mutatingWebhook) mutateContainers(containers []corev1.Container, annotationConfig *config) bool {
 	if len(containers) == 0 {
 		return false
 	}
@@ -210,7 +248,7 @@ func (mw *mutatingWebhook) mutateContainers(containers []corev1.Container, annot
 		container.VolumeMounts = append(container.VolumeMounts, []corev1.VolumeMount{
 			{
 				Name:      mw.volumeName,
-				MountPath: mw.volumePath,
+				MountPath: annotationConfig.volumePath,
 			},
 		}...)
 		// add AWS Web Identity Token environment variables to container
@@ -238,24 +276,47 @@ func (mw *mutatingWebhook) mutateContainers(containers []corev1.Container, annot
 }
 
 func (mw *mutatingWebhook) mutatePod(ctx context.Context, pod *corev1.Pod, ns string, dryRun bool) error {
-	// get service account AWS Role ARN annotation
-	annotationConfig, err := mw.getConfig(ctx, pod.Spec.ServiceAccountName, ns)
+	// get the configuration from the Service Account annotations
+	var annotationsConfig config
+	annotations, err := mw.getServiceAccountAnnotations(ctx, pod.Spec.ServiceAccountName, ns)
 	if err != nil {
 		return err
 	}
-	if !annotationConfig.generate {
+	// parse Service Account annotations
+	err = annotationsConfig.parseFromAnnotations(annotations, []string{})
+	if err != nil {
+		logger.WithFields(log.Fields{"service account": pod.Spec.ServiceAccountName, "namespace": ns}).
+			WithError(err).
+			Warnf("error parsing the annotations")
+	}
+	// parse the Pod annotations
+	err = annotationsConfig.parseFromAnnotations(pod.GetAnnotations(), []string{awsRoleArnKey})
+	if err != nil {
+		logger.WithFields(log.Fields{"pod": pod.Name, "namespace": ns}).
+			WithError(err).
+			Warnf("error parsing the annotations")
+	}
+	if !annotationsConfig.generate {
 		logger.Debug("skipping pods with Service Account without AWS Role ARN annotation")
 		return nil
 	}
+	// Set the volume path to default if not set
+	if annotationsConfig.volumePath == "" {
+		annotationsConfig.volumePath = mw.volumePath
+	}
+	if annotationsConfig.tokenFile == "" {
+		annotationsConfig.tokenFile = mw.tokenFile
+	}
 	// mutate Pod init containers
-	initContainersMutated := mw.mutateContainers(pod.Spec.InitContainers, annotationConfig)
+	initContainersMutated := mw.mutateContainers(pod.Spec.InitContainers, &annotationsConfig)
 	if initContainersMutated {
 		logger.Debug("successfully mutated pod init containers")
 	} else {
 		logger.Debug("no pod init containers were mutated")
 	}
+
 	// mutate Pod containers
-	containersMutated := mw.mutateContainers(pod.Spec.Containers, annotationConfig)
+	containersMutated := mw.mutateContainers(pod.Spec.Containers, &annotationsConfig)
 	if containersMutated {
 		logger.Debug("successfully mutated pod containers")
 	} else {
@@ -265,11 +326,11 @@ func (mw *mutatingWebhook) mutatePod(ctx context.Context, pod *corev1.Pod, ns st
 	if (initContainersMutated || containersMutated) && !dryRun {
 		// prepend gtoken init container (as first in it container)
 		pod.Spec.InitContainers = append([]corev1.Container{getGtokenContainer("generate-gcp-id-token",
-			mw.image, mw.pullPolicy, mw.volumeName, mw.volumePath, mw.tokenFile, false, annotationConfig)}, pod.Spec.InitContainers...)
+			mw.image, mw.pullPolicy, mw.volumeName, false, &annotationsConfig)}, pod.Spec.InitContainers...)
 		logger.Debug("successfully prepended pod init containers to spec")
 		// append sidekick gtoken update container (as last container)
 		pod.Spec.Containers = append(pod.Spec.Containers, getGtokenContainer("update-gcp-id-token",
-			mw.image, mw.pullPolicy, mw.volumeName, mw.volumePath, mw.tokenFile, true, annotationConfig))
+			mw.image, mw.pullPolicy, mw.volumeName, true, &annotationsConfig))
 		logger.Debug("successfully prepended pod sidekick containers to spec")
 		// append empty gtoken volume
 		pod.Spec.Volumes = append(pod.Spec.Volumes, getGtokenVolume(mw.volumeName))
@@ -290,9 +351,9 @@ func getGtokenVolume(volumeName string) corev1.Volume {
 	}
 }
 
-func getGtokenContainer(name, image, pullPolicy, volumeName, volumePath, tokenFile string,
-	refresh bool, annotationConfig config) corev1.Container {
-	cmd := []string{"/gtoken", fmt.Sprintf("--file=%s/%s", volumePath, tokenFile), fmt.Sprintf("--refresh=%t", refresh)}
+func getGtokenContainer(name, image, pullPolicy, volumeName string, refresh bool, annotationConfig *config) corev1.Container {
+	cmd := []string{"/gtoken", fmt.Sprintf("--file=%s/%s", annotationConfig.volumePath, annotationConfig.tokenFile),
+		fmt.Sprintf("--refresh=%t", refresh)}
 	if annotationConfig.audience != "" {
 		cmd = append(cmd, fmt.Sprintf("--audience=%s", annotationConfig.audience))
 	}
@@ -308,7 +369,7 @@ func getGtokenContainer(name, image, pullPolicy, volumeName, volumePath, tokenFi
 		VolumeMounts: []corev1.VolumeMount{
 			{
 				Name:      volumeName,
-				MountPath: volumePath,
+				MountPath: annotationConfig.volumePath,
 			},
 		},
 		Resources: corev1.ResourceRequirements{

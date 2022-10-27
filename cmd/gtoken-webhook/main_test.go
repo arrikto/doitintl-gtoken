@@ -60,6 +60,8 @@ func Test_mutatingWebhook_mutateContainers(t *testing.T) {
 					awsRoleArn: "arn:aws:iam::123456789012:role/testrole",
 					audience:   "audience",
 					generate:   true,
+					volumePath: "/test-volume-path",
+					tokenFile:  "test-token",
 				},
 				ns: "test-namespace",
 			},
@@ -100,6 +102,8 @@ func Test_mutatingWebhook_mutateContainers(t *testing.T) {
 					awsRoleArn: "arn:aws:iam::123456789012:role/testrole",
 					audience:   "audience",
 					generate:   true,
+					volumePath: "/test-volume-path",
+					tokenFile:  "test-token",
 				},
 				ns: "test-namespace",
 			},
@@ -155,7 +159,7 @@ func Test_mutatingWebhook_mutateContainers(t *testing.T) {
 				volumePath: tt.fields.volumePath,
 				tokenFile:  tt.fields.tokenFile,
 			}
-			got := mw.mutateContainers(tt.args.containers, tt.args.config)
+			got := mw.mutateContainers(tt.args.containers, &tt.args.config)
 			if got != tt.mutated {
 				t.Errorf("mutatingWebhook.mutateContainers() = %v, want %v", got, tt.mutated)
 			}
