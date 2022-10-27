@@ -4,18 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"google.golang.org/api/iamcredentials/v1"
 	"io"
 	"log"
 	"os"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
-	"google.golang.org/api/iamcredentials/v1"
-)
-
-const (
-	// default aud
-	defaultAud = "gtoken/sts/assume-role-with-web-identity"
+	"google.golang.org/api/idtoken"
 )
 
 type Token interface {
@@ -24,33 +20,34 @@ type Token interface {
 	WriteToFile(string, string) error
 }
 
-type IDToken struct{}
+type Method string
 
-func NewIDToken() Token {
-	return &IDToken{}
+const (
+	CredentialsAPI Method = "api"
+	MetadataServer        = "metadata"
+)
+
+type IDToken struct {
+	audience string
+	method   Method
 }
 
-func (IDToken) Generate(ctx context.Context, serviceAccount string) (string, error) {
-	log.Println("generating a new ID token")
-	iamCredentialsClient, err := iamcredentials.NewService(ctx)
-	if err != nil {
-		return "", fmt.Errorf("failed to get iam credentials client: %s", err.Error())
+func NewIDToken(audience string, method Method) Token {
+	return &IDToken{
+		audience: audience,
+		method:   method,
 	}
-	generateIDTokenResponse, err := iamCredentialsClient.Projects.ServiceAccounts.GenerateIdToken(
-		fmt.Sprintf("projects/-/serviceAccounts/%s", serviceAccount),
-		&iamcredentials.GenerateIdTokenRequest{
-			Audience:     defaultAud,
-			IncludeEmail: true,
-		},
-	).Do()
-	if err != nil {
-		return "", fmt.Errorf("failed to generate ID token: %s", err.Error())
-	}
-	log.Println("successfully generated ID token")
-	return generateIDTokenResponse.Token, nil
 }
 
-func (IDToken) GetDuration(jwtToken string) (time.Duration, error) {
+func (it *IDToken) Generate(ctx context.Context, serviceAccount string) (string, error) {
+	if it.method == MetadataServer {
+		return it.generateFromMetadata(ctx)
+	} else {
+		return it.generateFromCredentialsAPI(ctx, serviceAccount)
+	}
+}
+
+func (it *IDToken) GetDuration(jwtToken string) (time.Duration, error) {
 	// parse JWT token
 	parser := jwt.Parser{UseJSONNumber: true, SkipClaimsValidation: true}
 	token, _, err := parser.ParseUnverified(jwtToken, jwt.MapClaims{})
@@ -68,7 +65,7 @@ func (IDToken) GetDuration(jwtToken string) (time.Duration, error) {
 	return 0, fmt.Errorf("failed to get claims from ID token: %s", err.Error())
 }
 
-func (IDToken) WriteToFile(token, fileName string) error {
+func (it *IDToken) WriteToFile(token, fileName string) error {
 	// this is a slice of io.Writers we will write the file to
 	var writers []io.Writer
 
@@ -87,11 +84,45 @@ func (IDToken) WriteToFile(token, fileName string) error {
 		defer file.Close()
 	}
 	// MultiWriter(io.Writer...) returns a single writer which multiplexes its
-	// writes across all of the writers we pass in.
+	// writes across all the writers we pass in.
 	dest := io.MultiWriter(writers...)
 	// write to dest the same way as before, copying from the Body
 	if _, err := io.WriteString(dest, token); err != nil {
 		return fmt.Errorf("failed to write token: %s", err.Error())
 	}
 	return nil
+}
+
+func (it *IDToken) generateFromMetadata(ctx context.Context) (string, error) {
+	log.Println("generating a new ID token using the metadata server")
+	tokenSource, err := idtoken.NewTokenSource(ctx, it.audience)
+	if err != nil {
+		return "", fmt.Errorf("failed to create token source: %s", err.Error())
+	}
+	token, err := tokenSource.Token()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate ID token: %s", err.Error())
+	}
+	log.Println("successfully generated ID token")
+	return token.AccessToken, nil
+}
+
+func (it *IDToken) generateFromCredentialsAPI(ctx context.Context, serviceAccount string) (string, error) {
+	log.Println("generating a new ID token using the credentials API")
+	iamCredentialsClient, err := iamcredentials.NewService(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to get iam credentials client: %s", err.Error())
+	}
+	generateIDTokenResponse, err := iamCredentialsClient.Projects.ServiceAccounts.GenerateIdToken(
+		fmt.Sprintf("projects/-/serviceAccounts/%s", serviceAccount),
+		&iamcredentials.GenerateIdTokenRequest{
+			Audience:     it.audience,
+			IncludeEmail: true,
+		},
+	).Do()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate ID token: %s", err.Error())
+	}
+	log.Println("successfully generated ID token")
+	return generateIDTokenResponse.Token, nil
 }

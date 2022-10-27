@@ -20,6 +20,8 @@ var (
 	Version = "dev"
 	// BuildDate contains a string with the build date.
 	BuildDate = "unknown"
+	// default aud
+	defaultAud = "gtoken/sts/assume-role-with-web-identity"
 )
 
 func generateIDToken(ctx context.Context, sa gcp.ServiceAccountInfo, idToken gcp.Token, file string, refresh bool) error {
@@ -73,7 +75,15 @@ func generateIDToken(ctx context.Context, sa gcp.ServiceAccountInfo, idToken gcp
 }
 
 func generateIDTokenCmd(c *cli.Context) error {
-	return generateIDToken(handleSignals(), gcp.NewSaInfo(), gcp.NewIDToken(), c.String("file"), c.Bool("refresh"))
+	var method gcp.Method
+	if c.Bool("use-metadata-server") {
+		method = gcp.MetadataServer
+	} else {
+		method = gcp.CredentialsAPI
+	}
+	idToken := gcp.NewIDToken(c.String("audience"), method)
+
+	return generateIDToken(handleSignals(), gcp.NewSaInfo(), idToken, c.String("file"), c.Bool("refresh"))
 }
 
 func handleSignals() context.Context {
@@ -105,6 +115,16 @@ func main() {
 			&cli.StringFlag{
 				Name:  "file",
 				Usage: "write ID token into file (stdout, if not specified)",
+			},
+			&cli.StringFlag{
+				Name:  "audience",
+				Usage: "ID token audience",
+				Value: defaultAud,
+			},
+			&cli.BoolFlag{
+				Name:  "use-metadata-server",
+				Value: false,
+				Usage: "use the metadata server for issuing tokens",
 			},
 		},
 		Name:    "gtoken",
